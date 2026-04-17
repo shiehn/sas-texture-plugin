@@ -1,17 +1,22 @@
 /**
  * @signalsandsorcery/texture-plugin — Grid-Bound Texture Plugin
  *
- * Scaffold only (v0.0.1). The full feature orchestrates contract-aware
- * non-synth AI textures (field recordings, vocal fragments, cultural
- * instruments, broken/lo-fi character) chopped and stitched to the
- * scene grid. MIDI is the conductor; texture is the color.
+ * v0.1.0 — orchestrates contract-aware non-synth AI textures (field
+ * recordings, vocal fragments, broken gear, cultural instruments, hybrid
+ * impossible sources) via Lyria 3. MIDI tracks remain the conductor;
+ * texture is the color the synth tracks can't make.
  *
- * See sas-assistant/docs-ai-planning/texture-plugin-plan.md for the
- * design intent and the deferred v1 feature scope.
+ * See sas-assistant/docs-ai-planning/texture-plugin-plan.md for design
+ * intent and the deferred v2 feature scope (chop/stitch + per-chord
+ * pitch-shift + accent layers, blocked on PluginHost primitives for
+ * split-bars / mix / concatenate).
  */
 
-export { TexturePlugin, TEXTURE_PLUGIN_ID } from './plugin';
+export { TexturePlugin, TEXTURE_PLUGIN_ID, runGenerateTexture } from './plugin';
 export type { GenerateTextureInvocation, GenerateTextureResult } from './plugin';
+
+export { authorTexturePrompt, buildUserPrompt, stripLLMArtifacts } from './prompt-authoring';
+export type { AuthorPromptInputs, LLMCallFn } from './prompt-authoring';
 
 export { default } from './plugin';
 

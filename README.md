@@ -2,39 +2,42 @@
 
 Grid-Bound Texture plugin for [Signals & Sorcery](https://signalsandsorcery.com).
 
-## What it is (v1 target)
+## What it is
 
-A `GeneratorPlugin` that orchestrates **contract-aware, non-synth AI textures**
-and chops/stitches them onto the scene grid.
+A `GeneratorPlugin` that generates **contract-aware, non-synth AI textures** via
+Lyria 3 and drops them onto the active scene as a new audio track.
 
-The core idea: freeform text-to-audio models (Lyria3, Stable Audio, MusicGen)
-are unpredictable by nature — the model picks its own tempo, key, structure.
-Stitching freeform clips together rarely works musically. But a synth-like pad
-prompt wastes what the model is actually good at.
+The core idea: freeform text-to-audio models (Lyria 3, Stable Audio, MusicGen)
+are unpredictable by nature. Prompting them for a pad-like synth patch wastes
+what they're actually good at — and a synth preset does it for free, better.
+Their real superpower is *non-synth content*: field recordings, vocal fragments,
+broken gear, cultural instruments, hybrid impossible sources.
 
-This plugin treats the generative audio model as a **constrained texture oven**:
+This plugin's value-add is the **authored prompt**:
 
-- MIDI tracks (contract-driven) remain the rhythmic and harmonic authority.
-- An LLM call authors **texture prompts** from the scene contract + every
-  existing MIDI track's role prompt, biased away from synth-like outputs and
-  toward content a synth cannot make: field recordings, vocal fragments,
-  cultural instruments, broken/lo-fi character, story-encoded hybrids.
-- DSP (time-stretch, bar-align, pitch-shift, LUFS normalize) enforces every
-  musical dimension the model shouldn't be trusted with.
-- The resulting textured bed drops into the scene as a new sample track
-  layered under the MIDI parts.
+- An LLM call reads the scene contract (style description, genre, key, BPM) and
+  every existing track's role, then authors a Lyria-3 prompt biased *away* from
+  synth patches and toward content a synth cannot make.
+- The texture fills the timbral real estate the existing MIDI tracks leave
+  vacant — it doesn't duplicate what they already cover.
+- The host's `generateAudioTexture` handles the Lyria 3 call + bar-aligned trim.
+- The returned WAV drops onto a new audio track, volume pulled back so it sits
+  behind the foreground MIDI.
 
 > *"Don't generate songs. Generate textures. We handle the music."*
 
 See `sas-assistant/docs-ai-planning/texture-plugin-plan.md` in the host repo
-for the full design intent and deferred feature scope.
+for the full design intent. Chop / stitch / per-chord pitch-shift / accent
+layers are deferred to v2 (blocked on PluginHost primitives for `split-bars`,
+`mix`, and `concatenate`).
 
 ## Status
 
-**v0.0.1 — scaffold only.** This commit establishes the plugin shape
-(conforming to `GeneratorPlugin`) with a placeholder UI panel and a stub
-`generate_texture` skill. The core-side `lyria-service` + tool + real UI land
-in subsequent commits.
+**v0.1.0 — first working implementation.** The plugin authors a prompt from
+the scene contract + existing track roles, calls the host's Lyria 3 pipeline,
+and adds the result as a new audio track. UI is intentionally spare: a single
+**Generate Texture** button plus the authored prompt shown back for audit.
+Richer audition / re-roll controls land in v0.2+.
 
 ## Install
 
@@ -59,9 +62,10 @@ npm run build     # tsup produces dist/ (ESM + CJS + .d.ts)
 ```
 src/
 ├── index.ts              # barrel export
-├── plugin.tsx            # TexturePlugin class (GeneratorPlugin)
+├── plugin.tsx            # TexturePlugin class + runGenerateTexture()
+├── prompt-authoring.ts   # Lyria-3 prompt authoring (LLM-backed)
 ├── plugin.json           # Manifest for the SAS plugin registry
-└── __tests__/            # Jest conformance tests
+└── __tests__/            # Jest tests — orchestration + prompt authoring
 ```
 
 ## License
