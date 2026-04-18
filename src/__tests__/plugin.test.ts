@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
-import { TexturePlugin, TEXTURE_PLUGIN_ID } from '../plugin';
+import { TexturePlugin, TEXTURE_PLUGIN_ID, runRegenerateTexture } from '../plugin';
 
 // Minimal fake PluginHost — only the methods the plugin touches.
 function makeHost(overrides: Record<string, unknown> = {}) {
@@ -246,5 +246,81 @@ describe('TexturePlugin.generateTexture() — orchestration', () => {
     const audioCall = (host.generateAudioTexture as any).mock.calls[0][0];
     /* eslint-enable @typescript-eslint/no-explicit-any */
     expect(audioCall.bpm).toBeUndefined();
+  });
+});
+
+describe('runRegenerateTexture — in-place replacement', () => {
+  it('re-authors the prompt and writes the new clip onto the existing track', async () => {
+    const host = makeHost();
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const result = await runRegenerateTexture(host as any, 'existing-track-xyz', {});
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    expect(result.status).toBe('ok');
+    expect(result.trackId).toBe('existing-track-xyz');
+    expect(result.filePath).toBe('/tmp/tex.wav');
+
+    // Must NOT create a new track — that's the whole point.
+    expect(host.createTrack).not.toHaveBeenCalled();
+
+    // Must re-author (calls generateWithLLM) and re-generate audio.
+    expect(host.generateWithLLM).toHaveBeenCalledTimes(1);
+    expect(host.generateAudioTexture).toHaveBeenCalledTimes(1);
+
+    // Writes to the caller's track, not a fresh one.
+    expect(host.writeAudioClip).toHaveBeenCalledWith('existing-track-xyz', '/tmp/tex.wav');
+  });
+
+  it('preserves the track volume by default (does not touch setTrackVolume)', async () => {
+    const host = makeHost();
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    await runRegenerateTexture(host as any, 'existing-track-xyz', {});
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(host.setTrackVolume).not.toHaveBeenCalled();
+  });
+
+  it('applies an explicit in-range volume', async () => {
+    const host = makeHost();
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    await runRegenerateTexture(host as any, 'existing-track-xyz', { volume: 0.4 });
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(host.setTrackVolume).toHaveBeenCalledWith('existing-track-xyz', 0.4);
+  });
+
+  it('ignores an out-of-range volume', async () => {
+    const host = makeHost();
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    await runRegenerateTexture(host as any, 'existing-track-xyz', { volume: 9 });
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(host.setTrackVolume).not.toHaveBeenCalled();
+  });
+
+  it('returns no_scene without mutating the track when no scene is active', async () => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const host = makeHost({ getActiveSceneId: jest.fn<any>().mockReturnValue(null) });
+    const result = await runRegenerateTexture(host as any, 'existing-track-xyz', {});
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    expect(result.status).toBe('no_scene');
+    expect(host.generateAudioTexture).not.toHaveBeenCalled();
+    expect(host.writeAudioClip).not.toHaveBeenCalled();
+    expect(host.setTrackVolume).not.toHaveBeenCalled();
+  });
+
+  it('returns error on generateAudioTexture failure and leaves the existing track intact', async () => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const host = makeHost({
+      generateAudioTexture: jest.fn<any>().mockRejectedValue(new Error('Lyria down')),
+    });
+    const result = await runRegenerateTexture(host as any, 'existing-track-xyz', {});
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    expect(result.status).toBe('error');
+    expect(result.message).toMatch(/Lyria down/);
+
+    // Regenerate must NOT delete the user's existing track on failure —
+    // that's the behavioral difference from runGenerateTexture.
+    expect(host.deleteTrack).not.toHaveBeenCalled();
+    expect(host.writeAudioClip).not.toHaveBeenCalled();
   });
 });

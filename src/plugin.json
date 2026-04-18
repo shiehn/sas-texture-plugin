@@ -1,7 +1,7 @@
 {
   "id": "@signalsandsorcery/texture-plugin",
   "displayName": "Texture",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Grid-Bound Texture — contract-aware non-synth AI textures via Lyria 3.",
   "generatorType": "audio",
   "main": "index.js",

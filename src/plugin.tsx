@@ -140,16 +140,85 @@ export async function runGenerateTexture(
 }
 
 // -----------------------------------------------------------------------------
-// UI — a single Generate button with status feedback. Intentionally spare;
-// richer audition / re-roll controls land in v0.2+.
+// Regenerate — re-author the prompt against current scene context and replace
+// the audio on an existing track. Volume is preserved unless explicitly set.
+// -----------------------------------------------------------------------------
+
+export async function runRegenerateTexture(
+  host: PluginHost,
+  trackId: string,
+  params: GenerateTextureInvocation
+): Promise<GenerateTextureResult> {
+  const sceneId = host.getActiveSceneId();
+  if (!sceneId) {
+    return {
+      status: 'no_scene',
+      message: 'No active scene — select a scene before regenerating a texture.',
+    };
+  }
+
+  const [musicalContext, generationContext] = await Promise.all([
+    host.getMusicalContext().catch(() => null),
+    host.getGenerationContext().catch(() => null),
+  ]);
+
+  const concurrentTracks: PluginConcurrentTrackInfo[] =
+    generationContext?.concurrentTracks ?? [];
+
+  const prompt = await authorTexturePrompt(
+    (req) => host.generateWithLLM(req),
+    {
+      musicalContext,
+      concurrentTracks,
+      hint: params.hint,
+    }
+  );
+
+  try {
+    const generated = await host.generateAudioTexture({
+      prompt,
+      bpm: musicalContext?.bpm,
+    });
+    await host.writeAudioClip(trackId, generated.filePath);
+
+    if (typeof params.volume === 'number' && params.volume >= 0 && params.volume <= 1) {
+      await host.setTrackVolume(trackId, params.volume);
+    }
+
+    return {
+      status: 'ok',
+      prompt,
+      trackId,
+      filePath: generated.filePath,
+      durationSeconds: generated.durationSeconds,
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Texture regeneration failed';
+    return { status: 'error', prompt, message };
+  }
+}
+
+// -----------------------------------------------------------------------------
+// UI — Generate + Solo + Regenerate.
+//
+// Generate creates a brand-new track with a freshly authored prompt. After a
+// track exists, Solo and Regenerate operate on that last-generated track:
+// Solo toggles audio isolation (standard mixer behavior via host.setTrackSolo),
+// Regenerate re-authors the prompt and replaces the clip in-place.
 // -----------------------------------------------------------------------------
 
 const TexturePanel: ComponentType<PluginUIProps> = ({ host, activeSceneId }) => {
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [isSoloing, setIsSoloing] = useState(false);
+  const [isSoloed, setIsSoloed] = useState(false);
+  const [lastTrackId, setLastTrackId] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState<string | null>(null);
   const [lastStatus, setLastStatus] = useState<string | null>(null);
 
-  const disabled = isGenerating || !activeSceneId;
+  const busy = isGenerating || isRegenerating || isSoloing;
+  const generateDisabled = busy || !activeSceneId;
+  const trackActionsDisabled = busy || !activeSceneId || !lastTrackId;
 
   const handleGenerate = useCallback(async (): Promise<void> => {
     setIsGenerating(true);
@@ -158,6 +227,8 @@ const TexturePanel: ComponentType<PluginUIProps> = ({ host, activeSceneId }) => 
       const result = await runGenerateTexture(host, {});
       if (result.status === 'ok') {
         setLastPrompt(result.prompt ?? null);
+        setLastTrackId(result.trackId ?? null);
+        setIsSoloed(false);
         setLastStatus('Generated');
         host.showToast?.('success', 'Texture generated');
       } else if (result.status === 'no_scene') {
@@ -171,6 +242,53 @@ const TexturePanel: ComponentType<PluginUIProps> = ({ host, activeSceneId }) => 
       setIsGenerating(false);
     }
   }, [host]);
+
+  const handleRegenerate = useCallback(async (): Promise<void> => {
+    if (!lastTrackId) return;
+    setIsRegenerating(true);
+    setLastStatus(null);
+    try {
+      const result = await runRegenerateTexture(host, lastTrackId, {});
+      if (result.status === 'ok') {
+        setLastPrompt(result.prompt ?? null);
+        setLastStatus('Regenerated');
+        host.showToast?.('success', 'Texture regenerated');
+      } else if (result.status === 'no_scene') {
+        setLastStatus(result.message ?? 'No scene');
+        host.showToast?.('warning', 'Select a scene first');
+      } else {
+        setLastStatus(result.message ?? 'Error');
+        host.showToast?.('error', 'Texture regeneration failed', result.message);
+      }
+    } finally {
+      setIsRegenerating(false);
+    }
+  }, [host, lastTrackId]);
+
+  const handleToggleSolo = useCallback(async (): Promise<void> => {
+    if (!lastTrackId) return;
+    const next = !isSoloed;
+    setIsSoloing(true);
+    try {
+      await host.setTrackSolo(lastTrackId, next);
+      setIsSoloed(next);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Solo failed';
+      host.showToast?.('error', 'Solo failed', message);
+    } finally {
+      setIsSoloing(false);
+    }
+  }, [host, lastTrackId, isSoloed]);
+
+  const buttonStyle = (disabled: boolean, accent = false): React.CSSProperties => ({
+    padding: '6px 12px',
+    borderRadius: 4,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? 0.5 : 1,
+    background: accent ? 'rgba(106, 242, 197, 0.2)' : undefined,
+    border: accent ? '1px solid rgba(106, 242, 197, 0.6)' : undefined,
+    color: accent ? '#6AF2C5' : undefined,
+  });
 
   return React.createElement(
     'div',
@@ -186,18 +304,43 @@ const TexturePanel: ComponentType<PluginUIProps> = ({ host, activeSceneId }) => 
       'Authors a non-synth Lyria 3 prompt from the scene contract + existing track roles, then drops the generated audio as a new track.'
     ),
     React.createElement(
-      'button',
-      {
-        onClick: handleGenerate,
-        disabled,
-        style: {
-          padding: '6px 12px',
-          borderRadius: 4,
-          cursor: disabled ? 'not-allowed' : 'pointer',
-          opacity: disabled ? 0.5 : 1,
+      'div',
+      { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+      React.createElement(
+        'button',
+        {
+          onClick: handleGenerate,
+          disabled: generateDisabled,
+          style: buttonStyle(generateDisabled),
         },
-      },
-      isGenerating ? 'Generating…' : 'Generate Texture'
+        isGenerating ? 'Generating…' : 'Generate Texture'
+      ),
+      React.createElement(
+        'button',
+        {
+          onClick: handleRegenerate,
+          disabled: trackActionsDisabled,
+          style: buttonStyle(trackActionsDisabled),
+          title: lastTrackId
+            ? 'Re-author the prompt and replace the clip on the last-generated track'
+            : 'Generate a track first',
+        },
+        isRegenerating ? 'Regenerating…' : 'Regenerate'
+      ),
+      React.createElement(
+        'button',
+        {
+          onClick: handleToggleSolo,
+          disabled: trackActionsDisabled,
+          style: buttonStyle(trackActionsDisabled, isSoloed),
+          title: lastTrackId
+            ? isSoloed
+              ? 'Un-solo the last-generated texture track'
+              : 'Solo the last-generated texture track'
+            : 'Generate a track first',
+        },
+        isSoloing ? 'Working…' : isSoloed ? 'Unsolo' : 'Solo'
+      )
     ),
     lastStatus &&
       React.createElement(
@@ -230,7 +373,7 @@ const TexturePanel: ComponentType<PluginUIProps> = ({ host, activeSceneId }) => 
 export class TexturePlugin implements GeneratorPlugin {
   readonly id = TEXTURE_PLUGIN_ID;
   readonly displayName = 'Texture';
-  readonly version = '0.1.0';
+  readonly version = '0.2.0';
   readonly description =
     'Grid-Bound Texture — contract-aware non-synth AI textures via Lyria 3.';
   readonly generatorType = 'audio' as const;

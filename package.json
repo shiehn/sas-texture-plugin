@@ -1,6 +1,6 @@
 {
   "name": "@signalsandsorcery/texture-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Grid-Bound Texture plugin for Signals & Sorcery — contract-aware non-synth AI textures via Lyria 3.",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
